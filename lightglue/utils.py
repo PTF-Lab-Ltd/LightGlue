@@ -134,7 +134,7 @@ class Extractor(torch.nn.Module):
         self.conf = SimpleNamespace(**{**self.default_conf, **conf})
 
     @torch.no_grad()
-    def extract(self, img: torch.Tensor, masks: dict = None, **conf) -> dict:
+    def extract(self, img: torch.Tensor, masks: dict = {}, **conf) -> dict:
         """Perform extraction with online resizing"""
         if img.dim() == 3:
             img = img[None]  # add batch dim

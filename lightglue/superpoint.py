@@ -45,6 +45,7 @@
 import torch
 from kornia.color import rgb_to_grayscale
 from torch import nn
+import numpy as np
 
 from .utils import Extractor
 
@@ -152,9 +153,11 @@ class SuperPoint(Extractor):
         for key in self.required_data_keys:
             assert key in data, f"Missing key {key} in data"
         image = data["image"]
+        print(image.dtype)
+        if image.shape != torch.Size([1, 3, 1080, 1920]):
+            raise ValueError("image.shape shape must be (1080, 1920)") 
         if image.shape[1] == 3:
             image = rgb_to_grayscale(image)
-
         # Shared Encoder
         x = self.relu(self.conv1a(image))
         x = self.relu(self.conv1b(x))
@@ -187,6 +190,30 @@ class SuperPoint(Extractor):
 
         # Extract keypoints
         best_kp = torch.where(scores > self.conf.detection_threshold)
+
+        # Delete kepoints where positive_mask == False
+        if "positive_mask" in data["masks"]:
+            positive_mask = data["masks"]["positive_mask"]
+            print("Use positive mask")
+
+            if positive_mask.shape != (1080, 1920):
+                raise ValueError("positive_mask shape must be (1080, 1920)")
+
+            zeros = []
+            xs = []
+            ys = []
+            for i in range(best_kp[0].shape[0]):
+                y_y, x_x = best_kp[1][i].cpu().item(), best_kp[2][i].cpu().item()
+                if positive_mask[y_y, x_x]:
+                    zeros.append(0)
+                    xs.append(x_x)
+                    ys.append(y_y)
+
+            zeros = torch.Tensor(zeros).to(torch.int64).cuda()
+            xs = torch.Tensor(xs).to(torch.int64).cuda()
+            ys = torch.Tensor(ys).to(torch.int64).cuda()
+            best_kp = [zeros, ys, xs]
+
         scores = scores[best_kp]
 
         # Separate into batches
