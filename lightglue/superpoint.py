@@ -154,10 +154,10 @@ class SuperPoint(Extractor):
             assert key in data, f"Missing key {key} in data"
         image = data["image"]
         # print(data["masks"].keys())
-        if image.shape != torch.Size([1, 3, 1080, 1920]):
-            raise ValueError("image.shape shape must be (1080, 1920)") 
         if image.shape[1] == 3:
             image = rgb_to_grayscale(image)
+        if image.shape != torch.Size([1, 1, 1080, 1920]):
+            raise ValueError("image.shape shape must be (1080, 1920)") 
         # Shared Encoder
         x = self.relu(self.conv1a(image))
         x = self.relu(self.conv1b(x))
