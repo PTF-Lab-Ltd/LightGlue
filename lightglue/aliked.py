@@ -139,6 +139,7 @@ class DKD(nn.Module):
         b, c, h, w = scores_map.shape
         scores_nograd = scores_map.detach()
         nms_scores = simple_nms(scores_nograd, self.radius)
+  
 
         # remove border
         nms_scores[:, :, : self.radius, :] = 0
@@ -151,7 +152,7 @@ class DKD(nn.Module):
         else:
             nms_scores[:, :, -self.radius :, :] = 0
             nms_scores[:, :, :, -self.radius :] = 0
-
+        # print(f"{scores_nograd[0,0,30,30]=}")
         # detect keypoints without grad
         if self.top_k > 0:
             topk = torch.topk(nms_scores.view(b, -1), self.top_k)
@@ -678,6 +679,7 @@ class ALIKED(Extractor):
             resnet.conv3x3(4, 1),
         )
         self.desc_head = SDDH(dim, K, M, gate=self.gate, conv2D=conv2D, mask=mask)
+        conf.max_num_keypoints = 1000
         self.dkd = DKD(
             radius=conf.nms_radius,
             top_k=-1 if conf.detection_threshold > 0 else conf.max_num_keypoints,
@@ -738,21 +740,54 @@ class ALIKED(Extractor):
         return feature_map, score_map
 
     def forward(self, data: dict) -> dict:
+        print(f"{data.keys()=}")
         image = data["image"]
         if image.shape[1] == 1:
             image = grayscale_to_rgb(image)
+        print(f"{image.shape=}")
         feature_map, score_map = self.extract_dense_map(image)
+   
+        if "positive_mask" in data["masks"]:
+            print("USE POSITIVE MASK")
+            mask = data["masks"]["positive_mask"]
+            mask_tensor = torch.from_numpy(mask).to(score_map.device)
+            mask_tensor = mask_tensor.unsqueeze(0).unsqueeze(0)  # Добавляем размерности batch и channel
+
+            if mask_tensor.shape != score_map.shape:
+                print("mask_tensor.shape != score_map.shape, RESIZING")
+                print("mask shape before resize", mask_tensor.shape)
+                mask_tensor = F.interpolate(mask_tensor.float(), size=score_map.shape[2:], mode='nearest').bool()
+            print("mask shape ", mask_tensor.shape)
+            print(mask_tensor.dtype)
+            score_map = score_map * mask_tensor.float()
+        
+        if "negative_mask" in data["masks"]:
+            print("USE NEGATIVE MASK")
+            mask = data["masks"]["negative_mask"]
+            mask_tensor = torch.from_numpy(mask).to(score_map.device)
+            mask_tensor = mask_tensor.unsqueeze(0).unsqueeze(0)  # Добавляем размерности batch и channel
+            if mask_tensor.shape != score_map.shape:
+                print("mask_tensor.shape != score_map.shape, RESIZING")
+                print("mask shape before resize", mask_tensor.shape)
+                mask_tensor = F.interpolate(mask_tensor.float(), size=score_map.shape[2:], mode='nearest').bool()
+            print("mask shape ", mask_tensor.shape)
+            print(mask_tensor.dtype)
+            
+            score_map = score_map * (1 - mask_tensor.float())
+            
         keypoints, kptscores, scoredispersitys = self.dkd(
             score_map, image_size=data.get("image_size")
         )
+        
         descriptors, offsets = self.desc_head(feature_map, keypoints)
 
         _, _, h, w = image.shape
         wh = torch.tensor([w - 1, h - 1], device=image.device)
-        # no padding required
-        # we can set detection_threshold=-1 and conf.max_num_keypoints > 0
+
         return {
             "keypoints": wh * (torch.stack(keypoints) + 1) / 2.0,  # B x N x 2
             "descriptors": torch.stack(descriptors),  # B x N x D
-            "keypoint_scores": torch.stack(kptscores),  # B x N
+            "keypoint_scores": torch.stack(kptscores),  # B x N,
+            "feature_map": feature_map,
+            "keypoints_native": keypoints
         }
